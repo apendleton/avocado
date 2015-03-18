@@ -1,21 +1,15 @@
-import functools
-from multiprocessing.pool import ThreadPool
-from avocado.models import DataView
-from avocado.formatters import registry as formatters
+from avocado.models import DataConcept, DataView
+from avocado.formatters import Formatter
 from cStringIO import StringIO
 
 
 class BaseExporter(object):
     "Base class for all exporters"
-    short_name = 'base'
     file_extension = 'txt'
     content_type = 'text/plain'
     preferred_formats = ()
 
-    def __init__(self, concepts=None, preferred_formats=None):
-        if preferred_formats is not None:
-            self.preferred_formats = preferred_formats
-
+    def __init__(self, concepts=None):
         if concepts is None:
             concepts = ()
         elif isinstance(concepts, DataView):
@@ -26,27 +20,22 @@ class BaseExporter(object):
         self.row_length = 0
         self.concepts = concepts
 
-        self._header = []
-
         for concept in concepts:
-            formatter_class = formatters.get(concept.formatter)
-            self.add_formatter(formatter_class, concept=concept)
-
-        self._format_cache = {}
+            self.add_formatter(concept)
 
     def __repr__(self):
         return u'<{0}: {1}/{2}>'.format(self.__class__.__name__,
                                         len(self.params), self.row_length)
 
-    def add_formatter(self, formatter_class, concept=None, keys=None,
-                      index=None):
-
-        # Initialize a formatter instance.
-        formatter = formatter_class(concept=concept,
-                                    keys=keys,
-                                    formats=self.preferred_formats)
-
-        length = len(formatter.field_names)
+    def add_formatter(self, formatter, length=None, index=None):
+        if isinstance(formatter, DataConcept):
+            length = formatter.concept_fields.count()
+            formatter = formatter.format
+        elif isinstance(formatter, Formatter):
+            length = len(formatter.keys)
+        elif length is None:
+            raise ValueError('A length must be supplied with the to '
+                             'denote how much of the row will be formatted.')
 
         params = (formatter, length)
         self.row_length += length
@@ -56,116 +45,22 @@ class BaseExporter(object):
         else:
             self.params.append(params)
 
-        # Get the expected fields from this formatter to build
-        # up the header.
-        meta = formatter.get_meta(exporter=self.short_name.lower())
-        header = meta['header']
-
-        if index is not None:
-            self._header = (self._header[:index] +
-                            list(header) +
-                            self._header[index:])
-        else:
-            self._header.extend(header)
-
-    @property
-    def header(self):
-        return tuple(self._header)
-
     def get_file_obj(self, name=None):
         if name is None:
             return StringIO()
-
         if isinstance(name, basestring):
             return open(name, 'w+')
-
         return name
 
-    def _format_row(self, row, kwargs=None):
-        _row = []
-
+    def _format_row(self, row, **kwargs):
         for formatter, length in self.params:
             values, row = row[:length], row[length:]
+            yield formatter(values, preferred_formats=self.preferred_formats,
+                            **kwargs)
 
-            _row.extend(formatter(values, kwargs=kwargs))
-
-        return tuple(_row)
-
-    def _cache_format_row(self, row, kwargs=None):
-        _row = []
-
-        for formatter, length in self.params:
-            values, row = row[:length], row[length:]
-
-            key = (formatter, values)
-
-            if key not in self._format_cache:
-                segment = formatter(values, kwargs=kwargs)
-
-                self._format_cache[key] = segment
-            else:
-                segment = self._format_cache[key]
-
-            _row.extend(segment)
-
-        return tuple(_row)
-
-    def read(self, iterable, *args, **kwargs):
-        "Reads an iterable and generates formatted rows."
-        for row in iterable:
-            yield self._format_row(row, kwargs=kwargs)
-
-    def cached_read(self, iterable, *args, **kwargs):
-        """Reads an iterable and generates formatted rows.
-
-        This read implementation caches the output segments of the input
-        values and can significantly speed up formatting at the expense of
-        memory.
-
-        The benefit of this method is dependent on the data. If there is
-        high variability in the data, this method may not perform well.
-        """
-        self._format_cache = {}
-
-        for row in iterable:
-            yield self._cache_format_row(row, kwargs=kwargs)
-
-    def threaded_read(self, iterable, threads=None, *args, **kwargs):
-        """Reads an iterable and generates formatted rows.
-
-        This read implementation starts a pool of worker threads to format
-        the data in parallel.
-        """
-        pool = ThreadPool(threads)
-
-        f = functools.partial(self._format_row,
-                              kwargs=kwargs)
-
-        for row in pool.map(f, iterable):
-            yield row
-
-    def cached_threaded_read(self, iterable, threads=None, *args, **kwargs):
-        """Reads an iterable and generates formatted rows.
-
-        This read implementation combines the `cached_read` and `threaded_read`
-        methods.
-        """
-        self._format_cache = {}
-
-        pool = ThreadPool(threads)
-
-        f = functools.partial(self._cache_format_row,
-                              kwargs=kwargs)
-
-        for row in pool.map(f, iterable):
-            yield row
-
-    def manual_read(self, iterable, force_distinct=True, offset=None,
-                    limit=None, *args, **kwargs):
-        """Reads an iterable and generates formatted rows.
-
-        This method must be used if columns were added to the query to get
-        particular ordering, but are not part of the concepts being handled.
+    def read(self, iterable, force_distinct=True, offset=None, limit=None,
+             *args, **kwargs):
+        """Takes an iterable that produces rows to be formatted.
 
         If `force_distinct` is true, rows will be filtered based on the slice
         of the row that is going to be formatted.
@@ -195,9 +90,11 @@ class BaseExporter(object):
 
             if offset is None or i >= offset:
                 emitted += 1
-
-                yield self._format_row(_row, kwargs=kwargs)
+                yield self._format_row(_row, **kwargs)
 
     def write(self, iterable, *args, **kwargs):
-        for row in iterable:
-            yield row
+        for row_gen in self.read(iterable, *args, **kwargs):
+            row = []
+            for data in row_gen:
+                row.extend(data.values())
+            yield tuple(row)

@@ -21,36 +21,55 @@ class ExcelExporter(BaseExporter):
     def write(self, iterable, buff=None, *args, **kwargs):
         buff = self.get_file_obj(buff)
 
-        # Reference the header
-        header = self.header
-
         wb = Workbook(optimized_write=True)
 
         ws_data = wb.create_sheet()
         ws_data.title = 'Data'
 
-        # Create the data worksheet
-        ws_data.append([f['name'] for f in header])
+        header = []
 
-        for row in iterable:
+        # Create the data worksheet
+        for i, row_gen in enumerate(self.read(iterable, *args, **kwargs)):
+            row = []
+
+            for data in row_gen:
+                if i == 0:
+                    # Build up header row
+                    header.extend(data.keys())
+
+                # Add formatted section to the row
+                row.extend(data.values())
+
+            # Write headers on first iteration
+            if i == 0:
+                ws_data.append(header)
+
             ws_data.append(row)
 
         ws_dict = wb.create_sheet()
         ws_dict.title = 'Data Dictionary'
 
-        # Create the Data Dictionary worksheet
+        # Create the Data Dictionary Worksheet
         ws_dict.append((
-            'Label',
-            'Type',
+            'Field Name',
+            'Data Type',
             'Description',
+            'Concept Name',
+            'Concept Description',
         ))
 
-        for f in header:
-            ws_dict.append((
-                f['label'],
-                f['type'],
-                f['description'],
-            ))
+        for c in self.concepts:
+            cfields = c.concept_fields.select_related('field')
+
+            for cfield in cfields:
+                field = cfield.field
+                ws_dict.append((
+                    field.field_name,
+                    field.simple_type,
+                    field.description,
+                    c.name,
+                    c.description,
+                ))
 
         # This hacked up implementation is due to `save_virtual_workbook`
         # not behaving correctly. This function should handle the work

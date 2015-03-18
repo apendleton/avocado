@@ -44,7 +44,8 @@ class QueryProcessor(object):
 
         if self.include_pk:
             pk_name = trees[self.tree].root_model._meta.pk.name
-            exporter.add_formatter(RawFormatter, keys=[pk_name], index=0)
+            formatter = RawFormatter(keys=[pk_name])
+            exporter.add_formatter(formatter, index=0)
 
         return exporter
 

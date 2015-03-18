@@ -8,7 +8,6 @@ class JSONGeneratorEncoder(DjangoJSONEncoder):
     def default(self, obj):
         if inspect.isgenerator(obj):
             return list(obj)
-
         return super(JSONGeneratorEncoder, self).default(obj)
 
 
@@ -26,11 +25,7 @@ class JSONExporter(BaseExporter):
 
         encoder = JSONGeneratorEncoder()
 
-        keys = [f['name'] for f in self.header]
-
-        data = [dict(zip(keys, values)) for values in iterable]
-
-        for chunk in encoder.iterencode(data):
+        for chunk in encoder.iterencode(self.read(iterable, *args, **kwargs)):
             buff.write(chunk)
 
         return buff
